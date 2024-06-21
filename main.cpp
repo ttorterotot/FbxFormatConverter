@@ -1,8 +1,4 @@
 #include <fbxsdk.h>
-#include <windows.h>
-#include <shlwapi.h>
-#include <shlobj.h>
-#include <shellapi.h>
 #include <assert.h>
 #include <functional>
 #include <algorithm>
@@ -32,30 +28,6 @@ enum class FileFormat
 
 namespace FileSystemHelpers
 {
-    static std::string GetFullPathString( char const* pPath )
-    {
-        assert( pPath != nullptr && pPath[0] != 0 );
-
-        char fullpath[256] = { 0 };
-        DWORD length = GetFullPathNameA( pPath, 256, fullpath, nullptr );
-        assert( length != 0 && length != 255 );
-
-        // We always append the trailing slash to simplify further operations
-        DWORD const result = GetFileAttributesA( fullpath );
-        if ( result != INVALID_FILE_ATTRIBUTES && ( result & FILE_ATTRIBUTE_DIRECTORY ) && fullpath[length - 1] != '\\' )
-        {
-            fullpath[length] = '\\';
-            fullpath[length + 1] = 0;
-        }
-
-        return std::string( fullpath );
-    }
-
-    static std::string GetFullPathString( std::string const& path )
-    {
-        return GetFullPathString( path.c_str() );
-    }
-
     static std::string GetParentDirectoryPath( std::string const& path )
     {
         std::string dirPath;
@@ -68,24 +40,12 @@ namespace FileSystemHelpers
         return dirPath;
     }
 
-    static bool IsValidDirectoryPath( std::string const& directoryPath )
-    {
-        DWORD const result = GetFileAttributesA( directoryPath.c_str() );
-        if ( result != INVALID_FILE_ATTRIBUTES && ( result & FILE_ATTRIBUTE_DIRECTORY ) )
-        {
-            return true;
-        }
-
-        return false;
-    }
-
     static FileFormat GetFileFormat( std::string const& filePath )
     {
         FileFormat fileFormat = FileFormat::Unknown;
 
-        FILE* fp = nullptr;
-        int errcode = fopen_s( &fp, filePath.c_str(), "r" );
-        if ( errcode != 0 )
+        FILE* fp = fopen( filePath.c_str(), "r" );
+        if ( fp == nullptr )
         {
             return fileFormat;
         }
@@ -115,52 +75,12 @@ namespace FileSystemHelpers
         return fileFormat;
     }
 
-    static void GetDirectoryContents( std::string const& directoryPath, std::vector<std::string>& directoryContents )
-    {
-        if ( !IsValidDirectoryPath( directoryPath ) )
-        {
-            printf( "Error! %s is not a valid directory!", directoryPath.c_str() );
-            return;
-        }
-
-        //-------------------------------------------------------------------------
-
-        std::string const directorySearchPath = directoryPath + "*";
-
-        //-------------------------------------------------------------------------
-
-        WIN32_FIND_DATAA findData;
-        HANDLE foundFileHandle = FindFirstFileA( directorySearchPath.c_str(), &findData );
-        assert( foundFileHandle != INVALID_HANDLE_VALUE );
-
-        //-------------------------------------------------------------------------
-
-        char stringBuffer[1024] = { 0 };
-
-        do
-        {
-            if ( strcmp( findData.cFileName, "." ) == 0 || strcmp( findData.cFileName, ".." ) == 0 )
-            {
-                continue;
-            }
-
-            if ( findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY )
-            {
-                sprintf_s( stringBuffer, 1024, "%s%s\\", directoryPath.c_str(), findData.cFileName );
-                GetDirectoryContents( stringBuffer, directoryContents );
-            }
-            else
-            {
-                sprintf_s( stringBuffer, 1024, "%s%s", directoryPath.c_str(), findData.cFileName );
-                directoryContents.emplace_back( GetFullPathString( stringBuffer ) );
-            }
-        } while ( FindNextFileA( foundFileHandle, &findData ) != 0 );
-    }
-
-    static bool MakeDir( char const* pDirectoryPath )
+    static bool MakeDir( const char* const pDirectoryPath )
     {
         assert( pDirectoryPath != nullptr );
-        return SUCCEEDED( SHCreateDirectoryExA( nullptr, pDirectoryPath, nullptr ) );
+        if (*pDirectoryPath != '\0')
+            system((std::string("mkdir -p ") + pDirectoryPath).c_str()); // dirty but works
+        return true;
     }
 }
 
@@ -359,47 +279,6 @@ int main( int argc, char* argv[] )
             {
                 FileFormat const outputFormat = outputAsBinary ? FileFormat::Binary : FileFormat::Ascii;
 
-                inputConvertPath = FileSystemHelpers::GetFullPathString( inputConvertPath );
-                if ( FileSystemHelpers::IsValidDirectoryPath( inputConvertPath ) )
-                {
-                    std::vector<std::string> directoryContents;
-                    FileSystemHelpers::GetDirectoryContents( inputConvertPath, directoryContents );
-
-                    auto outputPath = cmdParser.get<std::string>( "o" );
-                    if ( outputPath.empty() )
-                    {
-                        for ( auto& filePath : directoryContents )
-                        {
-                            if ( !fbxConverter.IsFbxFile( filePath.c_str() ) )
-                            {
-                                continue;
-                            }
-
-                            fbxConverter.ConvertFbxFile( filePath.c_str(), filePath.c_str(), outputFormat );
-                        }
-
-                        return 0;
-                    }
-                    else // Convert and copy
-                    {
-                        outputPath = FileSystemHelpers::GetFullPathString( outputPath );
-
-                        for ( auto& filePath : directoryContents )
-                        {
-                            if ( !fbxConverter.IsFbxFile( filePath ) )
-                            {
-                                continue;
-                            }
-
-                            std::string newOutputPath = filePath;
-                            newOutputPath.replace( 0, inputConvertPath.length() - 1, outputPath.c_str() );
-                            fbxConverter.ConvertFbxFile( filePath, newOutputPath, outputFormat );
-                        }
-
-                        return 0;
-                    }
-                }
-                else
                 {
                     auto outputPath = cmdParser.get<std::string>( "o" );
                     if ( outputPath.empty() )
@@ -408,7 +287,6 @@ int main( int argc, char* argv[] )
                     }
                     else
                     {
-                        outputPath = FileSystemHelpers::GetFullPathString( outputPath );
                         return fbxConverter.ConvertFbxFile( inputConvertPath, outputPath, outputFormat );
                     }
                 }
@@ -419,23 +297,6 @@ int main( int argc, char* argv[] )
             auto inputQueryPath = cmdParser.get<std::string>( "q" );
             if ( !inputQueryPath.empty() )
             {
-                inputQueryPath = FileSystemHelpers::GetFullPathString( inputQueryPath );
-                if ( FileSystemHelpers::IsValidDirectoryPath( inputQueryPath ) )
-                {
-                    std::vector<std::string> directoryContents;
-                    FileSystemHelpers::GetDirectoryContents( inputQueryPath, directoryContents );
-
-                    for ( auto& filePath : directoryContents )
-                    {
-                        if ( !fbxConverter.IsFbxFile( filePath ) )
-                        {
-                            continue;
-                        }
-
-                        PrintFileFormat( filePath );
-                    }
-                }
-                else 
                 {
                     PrintFileFormat( inputQueryPath );
                 }
